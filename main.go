@@ -1,70 +1,77 @@
 package main
 
 import (
-	"crypto/sha256"
 	"crypto/tls"
-	"encoding/hex"
 	"fmt"
-	"log"
+	"github.com/alecthomas/kingpin"
 	"os"
-	"strings"
 
 	"github.com/miekg/dns"
 )
 
+var (
+	dnsserver string
+	target    string
+	port      string
+)
+
 func main() {
 
-	target := os.Args[1]
-	targetslices := strings.Split(target, ".")
-	port := strings.Split(targetslices[0], "_")[1]
-	proto := strings.Split(targetslices[1], "_")[1]
-	fqdn := strings.Join(targetslices[2:], ".")
-	server := "8.8.8.8"
+	app := kingpin.New(os.Args[0], "Check TLSA RR against the target using a specific nameserver.")
+	app.UsageTemplate(kingpin.CompactUsageTemplate)
+	app.Flag("dnsserver", "The dnsserver to use for the lookup.").Short('d').Default("8.8.8.8").StringVar(&dnsserver)
+	app.Flag("target", "The domain name to be checked").Short('t').Default("localhost").StringVar(&target)
+	app.Flag("port", "The port on which the target presents the cert.").Short('p').Default("443").StringVar(&port)
+	kingpin.MustParse(app.Parse(os.Args[1:]))
 
-	log.Printf("lookup: %s", target)
-	log.Printf(" dnssrv: %s", server)
-	log.Printf(" fqdn  : %s", fqdn)
-	log.Printf(" proto : %s", proto)
-	log.Printf(" port  : %s", port)
+	fmt.Printf("Dane check for: %s\n", target)
+	fmt.Printf(" dnsserver: %s\n", dnsserver)
+	fmt.Printf(" target   : %s\n", target)
+	fmt.Printf(" port     : %s\n", port)
 
 	c := dns.Client{}
 	m := dns.Msg{}
-	m.SetQuestion(target+".", dns.TypeTLSA)
-	r, t, err := c.Exchange(&m, server+":53")
+	rrstring := "_" + port + "._tcp." + target
+	m.SetQuestion(rrstring+".", dns.TypeTLSA)
+	fmt.Printf("\nLooking up %s\n", rrstring)
+	r, t, err := c.Exchange(&m, dnsserver+":53")
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println(err)
+		os.Exit(1)
 	}
-	log.Printf("DNS lookup took %v", t)
+	fmt.Printf("DNS lookup took %v\n\n", t)
 	if len(r.Answer) == 0 {
-		log.Fatal("No results")
+		fmt.Println("No results")
+		os.Exit(1)
 	}
 	for _, ans := range r.Answer {
-		log.Println(ans)
 		TLSArecord := ans.(*dns.TLSA)
+		fmt.Println("TLSA Record:")
+		fmt.Printf(" Usage       : %d\n", TLSArecord.Usage)
+		fmt.Printf(" Selector    : %d\n", TLSArecord.Selector)
+		fmt.Printf(" MatchingType: %d\n", TLSArecord.MatchingType)
+		fmt.Printf(" CertData    : %s\n", TLSArecord.Certificate)
+
 		tlsconfig := &tls.Config{
 			InsecureSkipVerify: true,
 		}
-		target = fmt.Sprintf("%s:%s", fqdn, port)
-		log.Printf("Loading certificate from %s", target)
-		conn, err := tls.Dial(proto, target, tlsconfig)
+		target = fmt.Sprintf("%s:%s", target, port)
+		fmt.Printf("\nLoading certificate from %s\n", target)
+		conn, err := tls.Dial("tcp", target, tlsconfig)
 		if err != nil {
-			log.Println(err)
+			fmt.Println(err)
+			os.Exit(1)
 		}
 		state := conn.ConnectionState()
 		cert := state.PeerCertificates[0]
-		log.Printf(" certificate: O=%s, CN=%s", strings.Join(cert.Subject.Organization, " O="), cert.Subject.CommonName)
+		fmt.Printf(" certificate: CN=%s\n", cert.Subject.CommonName)
 		conn.Close()
-		h := sha256.New()
-		h.Write(cert.Raw)
-		certSHA256 := hex.EncodeToString(h.Sum(nil))
-		log.Printf("TLSA record: %s", TLSArecord.Certificate)
-		log.Printf("Cert sha256: %s", certSHA256)
-
 		err = TLSArecord.Verify(cert)
 		if err != nil {
-			log.Println("ERROR      : Cert does not matches TLSA record.")
+			fmt.Println("ERROR      : Cert does not matches TLSA record.")
+			os.Exit(1)
 		} else {
-			log.Println("OK         : Cert matches TLSA record.")
+			fmt.Println("OK         : Cert matches TLSA record.")
 		}
 
 	}
