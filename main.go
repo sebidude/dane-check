@@ -64,8 +64,14 @@ func main() {
 		}
 		state := conn.ConnectionState()
 		cert := state.PeerCertificates[0]
+		hexstr, err := dns.CertificateToDANE(TLSArecord.Selector, TLSArecord.MatchingType, cert)
+		if err != nil {
+			fmt.Println(err)
+		}
 		fmt.Printf(" certificate: CN=%s\n", cert.Subject.CommonName)
+		fmt.Printf("Hex from cert: %s\n", hexstr)
 		conn.Close()
+
 		err = TLSArecord.Verify(cert)
 		if err != nil {
 			fmt.Println("ERROR      : Cert does not matches TLSA record.")
